@@ -29,18 +29,23 @@ struct bufferevent *serial_bev;
 struct sockaddr_in sin_out = {
 	.sin_family = AF_INET,
 };
+struct sockaddr_in sin_out2 = {
+	.sin_family = AF_INET,
+};
 int out_sock;
+int out_sock2;
 
 static void print_usage()
 {
-	printf("Usage: mavfwd [OPTIONS]\n"
+	printf("Usage: udpfwd [OPTIONS]\n"
 	       "Where:\n"
-	       "  --master        Local MAVLink master port (%s by default)\n"
-	       "  --baudrate      Serial port baudrate (%d by default)\n"
-	       "  --out           Remote output port (%s by default)\n"
+	       "  --out           Remote output UDP port (%s by default)\n"
+		   "  --out2          Second output UDP port (no default)\n"
 	       "  --in            Remote input port (%s by default)\n"
 	       "  --help          Display this help\n",
-	       default_master, default_baudrate, defualt_out_addr,
+		   " example: udpfwd --out 127.0.0.1:5600 --out2 127.0.0.1:5601 --in 192.168.1.8:5666 \n"
+		   ,
+	        defualt_out_addr, 
 	       default_in_addr);
 }
 
@@ -197,7 +202,9 @@ static void serial_event_cb(struct bufferevent *bev, short events, void *arg)
 		event_base_loopbreak(base);
 	}
 }
+static long ttl_udp=0;
 
+static long ttl_packs=0;
 static void in_read(evutil_socket_t sock, short event, void *arg)
 {
 	(void)event;
@@ -211,20 +218,42 @@ static void in_read(evutil_socket_t sock, short event, void *arg)
 		event_base_loopbreak(base);
 	}
 
-	assert(nread > 6);
+	if (sendto(out_sock, &buf, nread, 0,
+			   (struct sockaddr *)&sin_out,
+			   sizeof(sin_out)) == -1) {
+			perror("sendto()");
+			event_base_loopbreak(base);
+		}
 
-	dump_mavlink_packet(buf, "<<");
+	if (sendto(out_sock2, &buf, nread, 0,
+			   (struct sockaddr *)&sin_out2,
+			   sizeof(sin_out2)) == -1) {
+			perror("sendto2()");
+			event_base_loopbreak(base);
+		}		
 
-	bufferevent_write(serial_bev, buf, nread);
+	ttl_udp+=nread;
+	ttl_packs++;
+	if (ttl_packs%1000==1)
+ 		printf("%d KB (%d) \n", ttl_udp/1024, ttl_udp/ttl_packs);
+
+	//evbuffer_drain(&buf, nread);
+
+	//assert(nread > 6);
+
+	//dump_mavlink_packet(buf, "<<");
+
+	//bufferevent_write(serial_bev, buf, nread);
 }
 
 static int handle_data(const char *port_name, int baudrate,
-		       const char *out_addr, const char *in_addr)
+		       const char *out_addr,const char *out_addr2, const char *in_addr)
 {
 	struct event_base *base = NULL;
 	struct event *sig_int = NULL, *in_ev = NULL;
 	int ret = EXIT_SUCCESS;
 
+/*
 	int serial_fd = open(port_name, O_RDWR | O_NOCTTY);
 	if (serial_fd < 0) {
 		printf("Error while openning port %s: %s\n", port_name,
@@ -254,8 +283,11 @@ static int handle_data(const char *port_name, int baudrate,
 	cfmakeraw(&options);
 	tcsetattr(serial_fd, TCSANOW, &options);
 
+*/
 	out_sock = socket(AF_INET, SOCK_DGRAM, 0);
+	out_sock2 = socket(AF_INET, SOCK_DGRAM, 0);
 	int in_sock = socket(AF_INET, SOCK_DGRAM, 0);
+
 	struct sockaddr_in sin_in = {
 		.sin_family = AF_INET,
 	};
@@ -267,11 +299,16 @@ static int handle_data(const char *port_name, int baudrate,
 			     &sin_out.sin_port))
 		goto err;
 
+	if (!parse_host_port(out_addr2,
+			     (struct in_addr *)&sin_out2.sin_addr.s_addr,
+			     &sin_out2.sin_port))
+		goto err;
+
 	if (bind(in_sock, (struct sockaddr *)&sin_in, sizeof(sin_in))) {
 		perror("bind()");
 		exit(EXIT_FAILURE);
 	}
-	printf("Listening on %s...\n", in_addr);
+	printf("Listening UDP on %s  FWD to %s %s\n", in_addr, out_addr,out_addr2);
 
 	base = event_base_new();
 
@@ -280,22 +317,23 @@ static int handle_data(const char *port_name, int baudrate,
 	// it's recommended by libevent authors to ignore SIGPIPE
 	signal(SIGPIPE, SIG_IGN);
 
+/*
 	serial_bev = bufferevent_socket_new(base, serial_fd, 0);
 	bufferevent_setcb(serial_bev, serial_read_cb, NULL, serial_event_cb,
 			  base);
 	bufferevent_enable(serial_bev, EV_READ);
-
+*/
 	in_ev = event_new(base, in_sock, EV_READ | EV_PERSIST, in_read, NULL);
 	event_add(in_ev, NULL);
 
 	event_base_dispatch(base);
 
 err:
-	if (serial_fd >= 0)
-		close(serial_fd);
+	//if (serial_fd >= 0)
+//		close(serial_fd);
 
-	if (serial_bev)
-		bufferevent_free(serial_bev);
+	//if (serial_bev)
+//		bufferevent_free(serial_bev);
 
 	if (in_ev) {
 		event_del(in_ev);
@@ -319,6 +357,7 @@ int main(int argc, char **argv)
 		{ "master", required_argument, NULL, 'm' },
 		{ "baudrate", required_argument, NULL, 'b' },
 		{ "out", required_argument, NULL, 'o' },
+		{ "out2", required_argument, NULL, 'p' },
 		{ "in", required_argument, NULL, 'i' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
@@ -327,6 +366,7 @@ int main(int argc, char **argv)
 	const char *port_name = default_master;
 	int baudrate = default_baudrate;
 	const char *out_addr = defualt_out_addr;
+	const char *out_addr2 = defualt_out_addr;
 	const char *in_addr = default_in_addr;
 
 	int opt;
@@ -343,6 +383,10 @@ int main(int argc, char **argv)
 		case 'o':
 			out_addr = optarg;
 			break;
+		case 'p':
+			out_addr2 = optarg;
+			break;
+
 		case 'i':
 			in_addr = optarg;
 			break;
@@ -353,5 +397,5 @@ int main(int argc, char **argv)
 		}
 	}
 
-	return handle_data(port_name, baudrate, out_addr, in_addr);
+	return handle_data(port_name, baudrate, out_addr, out_addr2, in_addr);
 }
