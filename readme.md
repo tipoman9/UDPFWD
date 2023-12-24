@@ -7,3 +7,4 @@ Will read UDP packets from port 5666 and send them to two separate endpoints 127
 Each packet is resend as received, no buffering or packet aggregation applied.
 
 
+make -C /lib/modules/6.2.0-39-generic/build M=/home/home/linux62_39/linux-6.2/drivers/net/wireless/ath/ modules

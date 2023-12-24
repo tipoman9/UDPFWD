@@ -1,0 +1,14 @@
+cp updfwd.c /home/home/src/ipcssc338/openipc-firmware/output/build/mavfwd-c95613e241e03782fc6acc4780e60d8b4316a736/
+make -C /home/home/src/ipcssc338/openipc-firmware/output/ mavfwd-rebuild
+scp /home/home/src/ipcssc338/openipc-firmware/output/build/mavfwd-c95613e241e03782fc6acc4780e60d8b4316a736/mavfwd root@192.168.1.88:/usr/bin/
+
+
+#compile for ssc338
+/home/home/src/ipcssc338/openipc-firmware/output/per-package/mavfwd/host/bin/arm-openipc-linux-gnueabihf-gcc -levent_core -s udpfwd.c -o udpfwd
+
+#copy
+scp /home/home/src/udpfwd_old/udpfwd root@192.168.1.88:/usr/bin/
+
+#run on cam
+udpfwd --in 127.0.0.1 5666 --out 127.0.0.1:5600 --out2 192.168.1.20:5600 -m 20
+

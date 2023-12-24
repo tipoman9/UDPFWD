@@ -7,16 +7,14 @@
             "request": "launch",
             "program": "${workspaceFolder}/udpfwd",
             "args": [
-                "--master",
-                "/dev/ttyUSB0",
-                "--baudrate",
-                "115200",
+                "--in",
+                "192.168.1.20:5667",
                 "--out",
                 "127.0.0.1:5600",
                 "--out2",
                 "127.0.0.1:5601",                
-                "--in",
-                "192.168.1.8:5666"
+                "--metrics",
+                "20"   
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

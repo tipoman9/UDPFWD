@@ -20,10 +20,10 @@
 
 #define MAX_MTU 9000
 
-const char *default_master = "/dev/ttyAMA0";
-const int default_baudrate = 115200;
 const char *defualt_out_addr = "127.0.0.1:14600";
 const char *default_in_addr = "127.0.0.1:14601";
+
+
 
 struct bufferevent *serial_bev;
 struct sockaddr_in sin_out = {
@@ -34,6 +34,7 @@ struct sockaddr_in sin_out2 = {
 };
 int out_sock;
 int out_sock2;
+int metrics;
 
 static void print_usage()
 {
@@ -42,31 +43,14 @@ static void print_usage()
 	       "  --out           Remote output UDP port (%s by default)\n"
 		   "  --out2          Second output UDP port (no default)\n"
 	       "  --in            Remote input port (%s by default)\n"
+		   "  --metrics       Display traffic info\n"
 	       "  --help          Display this help\n",
 		   " example: udpfwd --out 127.0.0.1:5600 --out2 127.0.0.1:5601 --in 192.168.1.8:5666 \n"
 		   ,
 	        defualt_out_addr, 
 	       default_in_addr);
 }
-
-static speed_t speed_by_value(int baudrate)
-{
-	switch (baudrate) {
-	case 9600:
-		return B9600;
-	case 19200:
-		return B19200;
-	case 38400:
-		return B38400;
-	case 57600:
-		return B57600;
-	case 115200:
-		return B115200;
-	default:
-		printf("Not implemented baudrate %d\n", baudrate);
-		exit(EXIT_FAILURE);
-	}
-}
+ 
 
 static bool parse_host_port(const char *s, struct in_addr *out_addr,
 			    in_port_t *out_port)
@@ -106,92 +90,7 @@ static void signal_cb(evutil_socket_t fd, short event, void *arg)
 	printf("%s signal received\n", strsignal(fd));
 	event_base_loopbreak(base);
 }
-
-static void dump_mavlink_packet(unsigned char *data, const char *direction)
-{
-	uint8_t seq = data[2];
-	uint8_t sys_id = data[3];
-	uint8_t comp_id = data[4];
-	uint8_t msg_id = data[5];
-
-	printf("%s sender %d/%d\t%d\t%d\n", direction, sys_id, comp_id, seq,
-	       msg_id);
-}
-
-/* https://discuss.ardupilot.org/uploads/short-url/vS0JJd3BQfN9uF4DkY7bAeb6Svd.pdf
- * 0. Message header, always 0xFE
- * 1. Message length
- * 2. Sequence number -- rolls around from 255 to 0 (0x4e, previous was 0x4d)
- * 3. System ID - what system is sending this message
- * 4. Component ID- what component of the system is sending the message
- * 5. Message ID (e.g. 0 = heartbeat and many more! Don’t be shy, you can add too..)
- */
-static bool get_mavlink_packet(unsigned char *in_buffer, int buf_len,
-			       int *packet_len)
-{
-	if (buf_len < 6 /* header */) {
-		return false;
-	}
-	assert(in_buffer[0] == 0xFE);
-
-	uint8_t msg_len = in_buffer[1];
-	*packet_len = 6 /* header */ + msg_len + 2 /* crc */;
-	if (buf_len < *packet_len)
-		return false;
-
-	dump_mavlink_packet(in_buffer, ">>");
-
-	return true;
-}
-
-// Returns num bytes before first occurrence of 0xFE or full data length
-static size_t until_first_fe(unsigned char *data, size_t len)
-{
-	for (size_t i = 1; i < len; i++) {
-		if (data[i] == 0xFE) {
-			return i;
-		}
-	}
-	return len;
-}
-
-static void serial_read_cb(struct bufferevent *bev, void *arg)
-{
-	struct evbuffer *input = bufferevent_get_input(bev);
-	int packet_len, in_len;
-	struct event_base *base = arg;
-
-	while ((in_len = evbuffer_get_length(input))) {
-		unsigned char *data = evbuffer_pullup(input, in_len);
-		if (data == NULL) {
-			return;
-		}
-
-		// find first 0xFE and skip everything before it
-		if (*data != 0xFE) {
-			int bad_len = until_first_fe(data, in_len);
-			printf(">> Skipping %d bytes of unknown data\n",
-			       bad_len);
-			evbuffer_drain(input, bad_len);
-			continue;
-		}
-
-		if (!get_mavlink_packet(data, in_len, &packet_len))
-			return;
-
-		// TODO: check CRC correctness and skip bad packets
-
-		if (sendto(out_sock, data, packet_len, 0,
-			   (struct sockaddr *)&sin_out,
-			   sizeof(sin_out)) == -1) {
-			perror("sendto()");
-			event_base_loopbreak(base);
-		}
-
-		evbuffer_drain(input, packet_len);
-	}
-}
-
+ 
 static void serial_event_cb(struct bufferevent *bev, short events, void *arg)
 {
 	(void)bev;
@@ -205,6 +104,74 @@ static void serial_event_cb(struct bufferevent *bev, short events, void *arg)
 static long ttl_udp=0;
 
 static long ttl_packs=0;
+
+int max_udp_size;int max_udp_size;
+
+static int slots = 10;
+
+unsigned long long get_current_time_msWrong() {
+    time_t current_time = time(NULL);
+    return (unsigned long long)(current_time * 1000);
+}
+
+long long get_current_time_ms() {
+    struct timeval te; 
+    gettimeofday(&te, NULL); // get current time
+    long long milliseconds = te.tv_sec*1000LL + te.tv_usec/1000; // calculate milliseconds
+    // printf("milliseconds: %lld\n", milliseconds);
+    return milliseconds;
+}
+
+
+long long start;
+uint8_t last_slot;
+static float scale=0;
+//uint8_t SAMPLE_PER_SECOND=20;
+//uint32_t perfs[SAMPLE_PER_SECOND];
+uint32_t last_perf;
+static uint32_t maxperf=0;
+#define chart_width 50
+
+
+void periodstats(long bytesread){
+	long long elapsed=get_current_time_ms()-start;
+	if (elapsed>=1000){//start new
+		start=get_current_time_ms();
+		elapsed=0;		
+		
+		float newscale=(float)maxperf/chart_width;
+		if (newscale>scale*1.5 || newscale<scale/1.5){
+			scale=newscale;
+			printf("SCALE:%f",scale);
+			for (uint8_t j = 0; j < chart_width; ++j) 
+	            	printf("=");  
+			printf("\n",scale);
+		}
+		maxperf=0;	
+		//return;	
+	}
+	
+	int slot=(elapsed/ (1000/metrics) );
+	if (slot!=last_slot && scale>0){
+		printf("%02d=%04d|", (slot*1000/metrics)/10, last_perf);	
+		if (last_perf/scale>chart_width*2)//just in case not to overlap
+			last_perf=scale * chart_width*2;
+        for (uint8_t j = 0; j < (last_perf/scale); ++j) 
+	       	 printf("%c", (char)254u);//printf("_");        				
+		printf("\n");
+		
+		last_perf=0;
+	}
+	last_slot=slot;
+	last_perf+=1;
+	if(last_perf>maxperf)
+			maxperf=last_perf;
+	//perfs[slot]+=1;//bytesread;
+	
+
+
+}
+
 static void in_read(evutil_socket_t sock, short event, void *arg)
 {
 	(void)event;
@@ -234,8 +201,14 @@ static void in_read(evutil_socket_t sock, short event, void *arg)
 
 	ttl_udp+=nread;
 	ttl_packs++;
-	if (ttl_packs%1000==1)
- 		printf("%d KB (%d) \n", ttl_udp/1024, ttl_udp/ttl_packs);
+
+	if (metrics>0)
+		periodstats(nread);
+	else
+		if (ttl_packs%1000==1)
+ 			printf("%d KB (%d) \n", ttl_udp/1024, ttl_udp/ttl_packs);
+
+	
 
 	//evbuffer_drain(&buf, nread);
 
@@ -253,37 +226,6 @@ static int handle_data(const char *port_name, int baudrate,
 	struct event *sig_int = NULL, *in_ev = NULL;
 	int ret = EXIT_SUCCESS;
 
-/*
-	int serial_fd = open(port_name, O_RDWR | O_NOCTTY);
-	if (serial_fd < 0) {
-		printf("Error while openning port %s: %s\n", port_name,
-		       strerror(errno));
-		return EXIT_FAILURE;
-	};
-	evutil_make_socket_nonblocking(serial_fd);
-
-	struct termios options;
-	tcgetattr(serial_fd, &options);
-	cfsetspeed(&options, speed_by_value(baudrate));
-
-	options.c_cflag &= ~CSIZE; // Mask the character size bits
-	options.c_cflag |= CS8; // 8 bit data
-	options.c_cflag &= ~PARENB; // set parity to no
-	options.c_cflag &= ~PARODD; // set parity to no
-	options.c_cflag &= ~CSTOPB; // set one stop bit
-
-	options.c_cflag |= (CLOCAL | CREAD);
-
-	options.c_oflag &= ~OPOST;
-
-	options.c_lflag &= 0;
-	options.c_iflag &= 0; // disable software flow controll
-	options.c_oflag &= 0;
-
-	cfmakeraw(&options);
-	tcsetattr(serial_fd, TCSANOW, &options);
-
-*/
 	out_sock = socket(AF_INET, SOCK_DGRAM, 0);
 	out_sock2 = socket(AF_INET, SOCK_DGRAM, 0);
 	int in_sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -305,7 +247,7 @@ static int handle_data(const char *port_name, int baudrate,
 		goto err;
 
 	if (bind(in_sock, (struct sockaddr *)&sin_in, sizeof(sin_in))) {
-		perror("bind()");
+		perror("bind() input");
 		exit(EXIT_FAILURE);
 	}
 	printf("Listening UDP on %s  FWD to %s %s\n", in_addr, out_addr,out_addr2);
@@ -317,23 +259,21 @@ static int handle_data(const char *port_name, int baudrate,
 	// it's recommended by libevent authors to ignore SIGPIPE
 	signal(SIGPIPE, SIG_IGN);
 
-/*
-	serial_bev = bufferevent_socket_new(base, serial_fd, 0);
-	bufferevent_setcb(serial_bev, serial_read_cb, NULL, serial_event_cb,
-			  base);
-	bufferevent_enable(serial_bev, EV_READ);
-*/
 	in_ev = event_new(base, in_sock, EV_READ | EV_PERSIST, in_read, NULL);
 	event_add(in_ev, NULL);
 
 	event_base_dispatch(base);
 
 err:
-	//if (serial_fd >= 0)
-//		close(serial_fd);
 
-	//if (serial_bev)
-//		bufferevent_free(serial_bev);
+	if (out_sock>0)
+		close(out_sock);
+
+	if (out_sock2>0)
+		close(out_sock2);
+		
+	if (in_sock>0)
+		close(in_sock);
 
 	if (in_ev) {
 		event_del(in_ev);
@@ -346,6 +286,8 @@ err:
 	if (base)
 		event_base_free(base);
 
+	
+
 	libevent_global_shutdown();
 
 	return ret;
@@ -354,17 +296,15 @@ err:
 int main(int argc, char **argv)
 {
 	const struct option long_options[] = {
-		{ "master", required_argument, NULL, 'm' },
-		{ "baudrate", required_argument, NULL, 'b' },
 		{ "out", required_argument, NULL, 'o' },
 		{ "out2", required_argument, NULL, 'p' },
 		{ "in", required_argument, NULL, 'i' },
+		{ "metrics", required_argument, NULL, 'm' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
-
-	const char *port_name = default_master;
-	int baudrate = default_baudrate;
+	printf("UDP Forwarder.");
+	
 	const char *out_addr = defualt_out_addr;
 	const char *out_addr2 = defualt_out_addr;
 	const char *in_addr = default_in_addr;
@@ -373,22 +313,24 @@ int main(int argc, char **argv)
 	int long_index = 0;
 	while ((opt = getopt_long_only(argc, argv, "", long_options,
 				       &long_index)) != -1) {
-		switch (opt) {
-		case 'm':
-			port_name = optarg;
-			break;
-		case 'b':
-			baudrate = atoi(optarg);
-			break;
+		switch (opt) {		
 		case 'o':
 			out_addr = optarg;
 			break;
 		case 'p':
 			out_addr2 = optarg;
-			break;
+			break;			
 
 		case 'i':
 			in_addr = optarg;
+			break;
+		case 'm':
+			metrics = atoi(optarg);
+			if (metrics>2000)
+				metrics=2000;
+			if(metrics == 0) 
+				printf("No parsing, raw UART to UDP only\n");
+			start=get_current_time_ms();
 			break;
 		case 'h':
 		default:
@@ -397,5 +339,5 @@ int main(int argc, char **argv)
 		}
 	}
 
-	return handle_data(port_name, baudrate, out_addr, out_addr2, in_addr);
+	return handle_data(NULL, 0, out_addr, out_addr2, in_addr);
 }
