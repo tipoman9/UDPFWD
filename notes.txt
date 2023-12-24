@@ -10,5 +10,5 @@ scp /home/home/src/ipcssc338/openipc-firmware/output/build/mavfwd-c95613e241e037
 scp /home/home/src/udpfwd_old/udpfwd root@192.168.1.88:/usr/bin/
 
 #run on cam
-udpfwd --in 127.0.0.1 5666 --out 127.0.0.1:5600 --out2 192.168.1.20:5600 -m 20
+udpfwd --in 127.0.0.1:5666 --out 127.0.0.1:5600 --out2 192.168.1.20:5600 -m 20
 

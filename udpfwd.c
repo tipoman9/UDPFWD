@@ -131,6 +131,7 @@ static float scale=0;
 uint32_t last_perf;
 static uint32_t maxperf=0;
 #define chart_width 50
+#define  MAJESTIC_NALU 1400
 
 
 void periodstats(long bytesread){
@@ -166,8 +167,10 @@ void periodstats(long bytesread){
 	last_perf+=1;
 	if(last_perf>maxperf)
 			maxperf=last_perf;
+
+	if (bytesread>MAJESTIC_NALU)
+		printf(">>>>>>>>>>>>>   UDP Packet with size :%d  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",bytesread);
 	//perfs[slot]+=1;//bytesread;
-	
 
 
 }
