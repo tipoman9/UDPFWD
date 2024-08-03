@@ -233,6 +233,40 @@ static int handle_data(const char *port_name, int baudrate,
 	out_sock2 = socket(AF_INET, SOCK_DGRAM, 0);
 	int in_sock = socket(AF_INET, SOCK_DGRAM, 0);
 
+int reuse = 1;
+
+
+//in
+    int reuse = 1;
+    if (setsockopt(out_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+        perror("setsockopt(SO_REUSEADDR) failed");
+
+#ifdef SO_REUSEPORT
+    if (setsockopt(out_sock, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0) 
+        perror("setsockopt(SO_REUSEPORT) failed");
+#endif
+  
+//out1
+    int reuse = 1;
+    if (setsockopt(out_sock2, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+        perror("setsockopt(SO_REUSEADDR) failed");
+
+#ifdef SO_REUSEPORT
+    if (setsockopt(out_sock2, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0) 
+        perror("setsockopt(SO_REUSEPORT) failed");
+#endif
+
+//out2
+    int reuse = 1;
+    if (setsockopt(in_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+        perror("setsockopt(SO_REUSEADDR) failed");
+
+#ifdef SO_REUSEPORT
+    if (setsockopt(in_sock, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0) 
+        perror("setsockopt(SO_REUSEPORT) failed");
+#endif
+
+	
 	struct sockaddr_in sin_in = {
 		.sin_family = AF_INET,
 	};
